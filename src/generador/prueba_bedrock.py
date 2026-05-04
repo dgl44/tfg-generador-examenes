@@ -1,7 +1,11 @@
-import boto3 
-import json  
+import json
 
-client = boto3.client("bedrock-runtime", region_name="us-east-1")  
+import boto3
+from dotenv import load_dotenv
+
+load_dotenv()
+
+client = boto3.client("bedrock-runtime")
 
 response = client.invoke_model( 
     modelId="us.anthropic.claude-haiku-4-5-20251001-v1:0", 

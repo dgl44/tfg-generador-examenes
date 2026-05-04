@@ -9,6 +9,7 @@ authors = [
 ]
 dependencies = [
     "boto3>=1.40",
+    "python-dotenv>=1.2.2",
 ]
 
 [dependency-groups]
