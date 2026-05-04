@@ -1,0 +1,15 @@
+[project]
+name = "tfg-generador-examenes"
+version = "0.1.0"
+description = "Herramienta para la generación automática de exámenes a partir de repositorios de código fuente con LLMs"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [
+    { name = "Damián García López", email = "dgl44@alu.ua.es" }
+]
+dependencies = [
+    "boto3>=1.40",
+]
+
+[dependency-groups]
+dev = []
