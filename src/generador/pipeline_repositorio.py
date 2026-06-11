@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from crewai import Agent, Crew, LLM, Process, Task
 
-from parser import UnidadCodigo, extraer_unidades
+from parser import UnidadCodigo, extraer_unidades, lenguajes_soportados
 
 llm_haiku = LLM(
     model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -161,12 +161,51 @@ def procesar_archivo(
     return resultados
 
 
+# Directorios que no contienen código del alumno
+_DIRS_IGNORADOS = {
+    ".venv", "venv", "__pycache__", ".git",
+    "node_modules", "dist", "build", "migrations",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache",
+}
+
+
+def procesar_repositorio(
+    ruta_carpeta: str | Path,
+    contexto: ContextoAcademico | None = None,
+) -> list[dict]:
+    """Procesa todos los archivos soportados de una carpeta recursivamente."""
+    if contexto is None:
+        contexto = ContextoAcademico()
+
+    carpeta = Path(ruta_carpeta)
+    extensiones = set(lenguajes_soportados())
+
+    archivos = [
+        p for p in carpeta.rglob("*")
+        if p.is_file()
+        and p.suffix in extensiones
+        and not any(parte in _DIRS_IGNORADOS for parte in p.parts)
+    ]
+
+    print(f"\n{'#' * 60}")
+    print(f"# Repositorio: {carpeta}")
+    print(f"# Archivos encontrados: {len(archivos)}")
+    print(f"# Contexto: {contexto.descripcion()}")
+    print(f"{'#' * 60}\n")
+
+    todos: list[dict] = []
+    for archivo in sorted(archivos):
+        todos.extend(procesar_archivo(archivo, contexto))
+
+    return todos
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: uv run python src/generador/pipeline_repositorio.py <archivo>")
+        print("Uso: uv run python src/generador/pipeline_repositorio.py <archivo_o_carpeta>")
         sys.exit(1)
 
-    ruta = sys.argv[1]
+    ruta = Path(sys.argv[1])
     # Contexto de ejemplo — en la versión web el docente lo configurará
     contexto = ContextoAcademico(
         asignatura="Estructuras de Datos",
@@ -174,7 +213,11 @@ if __name__ == "__main__":
         titulacion="Ingeniería Informática",
         nivel="intermedio",
     )
-    resultados = procesar_archivo(ruta, contexto)
+
+    if ruta.is_dir():
+        resultados = procesar_repositorio(ruta, contexto)
+    else:
+        resultados = procesar_archivo(ruta, contexto)
 
     print(f"\n{'#' * 60}")
     print(f"# RESUMEN: {len(resultados)} preguntas generadas")
