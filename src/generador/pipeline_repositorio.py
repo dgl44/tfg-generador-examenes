@@ -1,11 +1,13 @@
-"""Pipeline que procesa un archivo Python completo.
+"""Pipeline que procesa un archivo de código completo.
 
-Combina el parser AST con el patrón generator-critic: por cada función
-o clase extraída del archivo, genera una pregunta tipo test y la revisa
-con un segundo agente, devolviendo el conjunto de preguntas resultantes.
+Combina el parser tree-sitter con el patrón generator-critic: filtra
+unidades triviales y, por cada unidad relevante, genera una pregunta
+tipo test adaptada al contexto académico y la revisa con un segundo
+agente.
 """
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,96 +27,99 @@ llm_haiku = LLM(
 )
 
 
-# ------------------------- Agentes -------------------------
+# ------------------------- Contexto académico -------------------------
 
-generador = Agent(
-    role="Docente generador de preguntas",
-    goal=(
-        "Crear una pregunta tipo test clara y bien formulada sobre un "
-        "fragmento de código Python."
-    ),
-    backstory=(
-        "Eres un profesor de programación con años de experiencia diseñando "
-        "exámenes para estudiantes de Ingeniería Informática. Tus preguntas "
-        "son precisas, evalúan comprensión real del código y tienen un único "
-        "distractor obviamente incorrecto, dos plausibles pero incorrectos, "
-        "y una respuesta correcta inequívoca."
-    ),
-    llm=llm_haiku,
-    verbose=True,
-)
+@dataclass
+class ContextoAcademico:
+    """Parámetros configurables por el docente para adaptar las preguntas."""
+    asignatura: str = "Programación"
+    curso: str = "2º de Grado"
+    titulacion: str = "Ingeniería Informática"
+    nivel: str = "intermedio"  # básico | intermedio | avanzado
 
-revisor = Agent(
-    role="Revisor pedagógico de preguntas de examen",
-    goal=(
-        "Validar que las preguntas generadas son claras, técnicamente "
-        "correctas y pedagógicamente útiles."
-    ),
-    backstory=(
-        "Eres un coordinador docente con experiencia en evaluación. Tu papel "
-        "es ser un crítico constructivo: detectas problemas que el generador "
-        "pueda haber pasado por alto y devuelves un veredicto claro junto "
-        "con sugerencias concretas de mejora cuando sea necesario."
-    ),
-    llm=llm_haiku,
-    verbose=True,
-)
+    def descripcion(self) -> str:
+        return (
+            f"{self.asignatura} ({self.curso}, {self.titulacion}), "
+            f"nivel {self.nivel}"
+        )
 
 
 # ------------------------- Tareas por unidad -------------------------
 
-def construir_crew_para_unidad(unidad: UnidadCodigo) -> Crew:
+def construir_crew_para_unidad(unidad: UnidadCodigo, contexto: ContextoAcademico) -> Crew:
     """Crea un crew con las tareas de generar + revisar para una unidad."""
-    contexto_tipo = "función" if unidad.tipo == "funcion" else "clase"
-    docstring_info = (
-        f"\nDocstring: {unidad.docstring}" if unidad.docstring else ""
+    tipo_str = "función" if unidad.tipo == "funcion" else "clase"
+    docstring_info = f"\nDocstring: {unidad.docstring}" if unidad.docstring else ""
+    desc = contexto.descripcion()
+
+    agente_generador = Agent(
+        role="Docente generador de preguntas",
+        goal="Crear una pregunta tipo test clara y bien formulada sobre un fragmento de código.",
+        backstory=(
+            f"Eres un profesor con años de experiencia diseñando exámenes para "
+            f"{contexto.asignatura} de {contexto.titulacion}. Tus preguntas están "
+            f"calibradas para estudiantes de {contexto.curso} con nivel {contexto.nivel}: "
+            "ni triviales ni esotéricas. Evalúan comprensión real del código y tienen "
+            "distractores plausibles con una única respuesta correcta inequívoca."
+        ),
+        llm=llm_haiku,
+        verbose=True,
+    )
+
+    agente_revisor = Agent(
+        role="Revisor pedagógico de preguntas de examen",
+        goal="Validar que las preguntas son claras, técnicamente correctas y adecuadas al nivel.",
+        backstory=(
+            "Eres un coordinador docente experto en evaluación. Eres un crítico "
+            "constructivo: detectas errores técnicos, ambigüedades y preguntas "
+            "triviales para el nivel indicado, y devuelves un veredicto claro "
+            "con sugerencias concretas cuando es necesario."
+        ),
+        llm=llm_haiku,
+        verbose=True,
     )
 
     tarea_generar = Task(
         description=(
-            f"Analiza la siguiente {contexto_tipo} Python llamada "
-            f"'{unidad.nombre}' y genera UNA pregunta tipo test con 4 "
-            "opciones (A, B, C, D), donde solo una es correcta. La "
-            "pregunta debe evaluar comprensión del comportamiento del "
-            "código, no sintaxis trivial. Indica al final cuál es la "
-            "respuesta correcta y justifica brevemente por qué."
+            f"Contexto: pregunta para {desc}.\n\n"
+            f"Analiza la siguiente {tipo_str} llamada '{unidad.nombre}' y genera "
+            f"UNA pregunta tipo test con 4 opciones (A, B, C, D), donde solo una "
+            f"es correcta. La pregunta debe evaluar comprensión a nivel {contexto.nivel}, "
+            "no sintaxis trivial. Indica la respuesta correcta y justifica brevemente."
             f"{docstring_info}\n\n"
-            f"Código:\n```python\n{unidad.codigo}\n```"
+            f"Código:\n```\n{unidad.codigo}\n```"
         ),
         expected_output=(
-            "Una pregunta tipo test con enunciado claro, 4 opciones "
-            "etiquetadas A-D, la respuesta correcta indicada y una "
-            "justificación breve."
+            "Una pregunta tipo test con enunciado claro, 4 opciones etiquetadas "
+            "A-D, la respuesta correcta indicada y una justificación breve."
         ),
-        agent=generador,
+        agent=agente_generador,
     )
 
     tarea_revisar = Task(
         description=(
-            "Revisa la pregunta generada por el agente anterior. Evalúala "
-            "según estos criterios:\n"
+            f"Contexto: la pregunta es para {desc}.\n\n"
+            "Revisa la pregunta generada evaluando:\n"
             "1. ¿El enunciado es claro y preciso?\n"
-            "2. ¿Las 4 opciones están bien planteadas (una correcta "
-            "inequívoca, distractores plausibles)?\n"
-            "3. ¿La respuesta marcada como correcta lo es realmente, dado "
-            "el código original?\n"
-            "4. ¿La justificación que da el generador es correcta?\n"
-            "5. ¿El nivel de dificultad es apropiado para un estudiante "
-            "de Ingeniería Informática?\n\n"
-            "Devuelve un veredicto en una de estas tres categorías: "
-            "APROBADA, APROBADA CON SUGERENCIAS o RECHAZADA, seguido de "
-            "un comentario justificando el veredicto."
+            "2. ¿Las 4 opciones están bien planteadas (una correcta inequívoca, "
+            "distractores plausibles)?\n"
+            "3. ¿La respuesta marcada es realmente correcta dado el código?\n"
+            "4. ¿La justificación del generador es correcta?\n"
+            f"5. ¿El nivel de dificultad es apropiado para {desc}? "
+            "Rechaza preguntas trivialmente obvias para ese nivel.\n\n"
+            "Veredicto: APROBADA, APROBADA CON SUGERENCIAS o RECHAZADA, "
+            "seguido de un comentario justificado."
         ),
         expected_output=(
             "Veredicto (APROBADA / APROBADA CON SUGERENCIAS / RECHAZADA) "
-            "seguido de un comentario detallado justificando la decisión."
+            "seguido de un comentario detallado."
         ),
-        agent=revisor,
+        agent=agente_revisor,
         context=[tarea_generar],
     )
 
     return Crew(
-        agents=[generador, revisor],
+        agents=[agente_generador, agente_revisor],
         tasks=[tarea_generar, tarea_revisar],
         process=Process.sequential,
         verbose=True,
@@ -123,19 +128,33 @@ def construir_crew_para_unidad(unidad: UnidadCodigo) -> Crew:
 
 # ------------------------- Pipeline principal -------------------------
 
-def procesar_archivo(ruta_archivo: str | Path) -> list[dict]:
-    """Procesa un archivo .py: extrae unidades y genera+revisa preguntas."""
+def procesar_archivo(
+    ruta_archivo: str | Path,
+    contexto: ContextoAcademico | None = None,
+) -> list[dict]:
+    """Procesa un archivo: extrae unidades, filtra triviales y genera+revisa preguntas."""
+    if contexto is None:
+        contexto = ContextoAcademico()
+
     unidades = extraer_unidades(ruta_archivo)
+
+    triviales = [u for u in unidades if u.es_trivial()]
+    a_procesar = [u for u in unidades if not u.es_trivial()]
+
     print(f"\n{'#' * 60}")
     print(f"# Encontradas {len(unidades)} unidades en {ruta_archivo}")
+    print(f"# Contexto: {contexto.descripcion()}")
+    if triviales:
+        print(f"# Descartadas {len(triviales)} triviales: {[u.nombre for u in triviales]}")
+    print(f"# A procesar: {len(a_procesar)}")
     print(f"{'#' * 60}\n")
 
     resultados: list[dict] = []
-    for i, unidad in enumerate(unidades, start=1):
+    for i, unidad in enumerate(a_procesar, start=1):
         print(f"\n{'=' * 60}")
-        print(f"UNIDAD {i}/{len(unidades)}: {unidad}")
+        print(f"UNIDAD {i}/{len(a_procesar)}: {unidad}")
         print(f"{'=' * 60}")
-        crew = construir_crew_para_unidad(unidad)
+        crew = construir_crew_para_unidad(unidad, contexto)
         salida = crew.kickoff()
         resultados.append({"unidad": unidad, "salida": salida})
 
@@ -144,11 +163,18 @@ def procesar_archivo(ruta_archivo: str | Path) -> list[dict]:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: uv run python src/generador/pipeline_repositorio.py <archivo.py>")
+        print("Uso: uv run python src/generador/pipeline_repositorio.py <archivo>")
         sys.exit(1)
 
     ruta = sys.argv[1]
-    resultados = procesar_archivo(ruta)
+    # Contexto de ejemplo — en la versión web el docente lo configurará
+    contexto = ContextoAcademico(
+        asignatura="Estructuras de Datos",
+        curso="2º de Grado",
+        titulacion="Ingeniería Informática",
+        nivel="intermedio",
+    )
+    resultados = procesar_archivo(ruta, contexto)
 
     print(f"\n{'#' * 60}")
     print(f"# RESUMEN: {len(resultados)} preguntas generadas")
