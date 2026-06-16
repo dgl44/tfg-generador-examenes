@@ -56,6 +56,88 @@ class ContextoAcademico:
         )
 
 
+# ------------------------- Resultado estructurado -------------------------
+
+class Veredicto(str, Enum):
+    APROBADA = "APROBADA"
+    APROBADA_SUGERENCIAS = "APROBADA CON SUGERENCIAS"
+    RECHAZADA = "RECHAZADA"
+    DESCONOCIDO = "DESCONOCIDO"  # no se pudo deducir del texto del revisor
+
+
+@dataclass
+class ResultadoPregunta:
+    """Resultado estructurado de generar y revisar una pregunta.
+
+    Separa la pregunta generada de la crítica del revisor para que la
+    capa de presentación (futuro frontend) pueda mostrarlas por separado
+    y permitir al docente editar, aprobar o descartar cada pregunta de
+    forma individual antes de incluirla en el examen.
+    """
+    unidad: UnidadCodigo
+    tipo: TipoPregunta
+    pregunta_generada: str
+    veredicto: Veredicto
+    comentario_revisor: str
+
+
+def _clasificar_veredicto(fragmento: str) -> Veredicto:
+    """Clasifica un fragmento de texto (en mayúsculas) en un veredicto.
+
+    El orden importa: 'RECHAZADA' se comprueba antes que 'APROBADA' porque
+    un texto que rechaza la pregunta suele mencionar también la palabra
+    'aprobada' en otros contextos ('no puede ser aprobada').
+    """
+    if "RECHAZADA" in fragmento:
+        return Veredicto.RECHAZADA
+    if "SUGERENCIA" in fragmento:  # "APROBADA CON SUGERENCIAS"
+        return Veredicto.APROBADA_SUGERENCIAS
+    if "APROBADA" in fragmento:
+        return Veredicto.APROBADA
+    return Veredicto.DESCONOCIDO
+
+
+def _extraer_veredicto(texto_revisor: str) -> Veredicto:
+    """Deduce el veredicto a partir del texto libre del revisor.
+
+    Heurística: se clasifica primero la ventana de texto que sigue a la
+    última aparición del marcador 'VEREDICTO', ya que ahí es donde el
+    revisor declara su decisión. Si no hay marcador o no es concluyente,
+    se recurre a un escaneo del texto completo.
+    """
+    texto = texto_revisor.upper()
+    pos = texto.rfind("VEREDICTO")
+    if pos != -1:
+        resultado = _clasificar_veredicto(texto[pos:pos + 80])
+        if resultado is not Veredicto.DESCONOCIDO:
+            return resultado
+    return _clasificar_veredicto(texto)
+
+
+def _texto_tarea(task_output) -> str:
+    """Extrae el texto plano de la salida de una tarea de CrewAI."""
+    return getattr(task_output, "raw", str(task_output)).strip()
+
+
+def _construir_resultado(
+    unidad: UnidadCodigo,
+    tipo: TipoPregunta,
+    salida_crew,
+) -> ResultadoPregunta:
+    """Convierte la salida del crew (generar + revisar) en un resultado estructurado."""
+    tareas = getattr(salida_crew, "tasks_output", None) or []
+    pregunta = _texto_tarea(tareas[0]) if len(tareas) >= 1 else str(salida_crew).strip()
+    comentario = _texto_tarea(tareas[1]) if len(tareas) >= 2 else ""
+    veredicto = _extraer_veredicto(comentario) if comentario else Veredicto.DESCONOCIDO
+    return ResultadoPregunta(
+        unidad=unidad,
+        tipo=tipo,
+        pregunta_generada=pregunta,
+        veredicto=veredicto,
+        comentario_revisor=comentario,
+    )
+
+
 # ------------------------- Tareas por unidad -------------------------
 
 def _prompts_por_tipo(
@@ -84,6 +166,9 @@ def _prompts_por_tipo(
         )
         desc_rev = (
             f"Contexto: la pregunta es para {desc}.\n\n"
+            "Ten en cuenta que el código de la unidad se mostrará al estudiante "
+            "junto al enunciado, por lo que NO debes penalizar que la pregunta "
+            "no incluya literalmente el código.\n\n"
             "Revisa la pregunta evaluando:\n"
             "1. ¿El enunciado es claro y preciso?\n"
             "2. ¿Las 4 opciones están bien planteadas (una correcta inequívoca, "
@@ -116,6 +201,9 @@ def _prompts_por_tipo(
         )
         desc_rev = (
             f"Contexto: pregunta de traza para {desc}.\n\n"
+            "Ten en cuenta que el código de la unidad se mostrará al estudiante "
+            "junto al enunciado, por lo que NO debes penalizar que la pregunta "
+            "no incluya literalmente el código.\n\n"
             "Revisa la pregunta evaluando:\n"
             "1. ¿La llamada de ejemplo es válida para el código dado?\n"
             "2. ¿La respuesta esperada es determinista e inequívoca?\n"
@@ -144,6 +232,9 @@ def _prompts_por_tipo(
         )
         desc_rev = (
             f"Contexto: pregunta abierta para {desc}.\n\n"
+            "Ten en cuenta que el código de la unidad se mostrará al estudiante "
+            "junto al enunciado, por lo que NO debes penalizar que la pregunta "
+            "no incluya literalmente el código.\n\n"
             "Revisa la pregunta evaluando:\n"
             "1. ¿El enunciado está bien delimitado (no es demasiado vago)?\n"
             "2. ¿La respuesta modelo es técnicamente correcta?\n"
@@ -184,7 +275,7 @@ def construir_crew_para_unidad(
             "ni triviales ni esotéricas. Evalúan comprensión real del código."
         ),
         llm=llm_haiku,
-        verbose=True,
+        verbose=False,
     )
 
     agente_revisor = Agent(
@@ -196,7 +287,7 @@ def construir_crew_para_unidad(
             "claro con sugerencias concretas cuando es necesario."
         ),
         llm=llm_haiku,
-        verbose=True,
+        verbose=False,
     )
 
     tarea_generar = Task(
@@ -216,7 +307,7 @@ def construir_crew_para_unidad(
         agents=[agente_generador, agente_revisor],
         tasks=[tarea_generar, tarea_revisar],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
     )
 
 
@@ -225,7 +316,7 @@ def construir_crew_para_unidad(
 def procesar_archivo(
     ruta_archivo: str | Path,
     contexto: ContextoAcademico | None = None,
-) -> list[dict]:
+) -> list[ResultadoPregunta]:
     """Procesa un archivo: extrae unidades, filtra triviales y genera+revisa preguntas."""
     if contexto is None:
         contexto = ContextoAcademico()
@@ -244,7 +335,7 @@ def procesar_archivo(
     print(f"{'#' * 60}\n")
 
     tipos = contexto.tipos_pregunta
-    resultados: list[dict] = []
+    resultados: list[ResultadoPregunta] = []
     for i, unidad in enumerate(a_procesar, start=1):
         tipo = tipos[(i - 1) % len(tipos)]
         print(f"\n{'=' * 60}")
@@ -252,7 +343,7 @@ def procesar_archivo(
         print(f"{'=' * 60}")
         crew = construir_crew_para_unidad(unidad, contexto, tipo)
         salida = crew.kickoff()
-        resultados.append({"unidad": unidad, "tipo": tipo, "salida": salida})
+        resultados.append(_construir_resultado(unidad, tipo, salida))
 
     return resultados
 
@@ -268,7 +359,7 @@ _DIRS_IGNORADOS = {
 def procesar_repositorio(
     ruta_carpeta: str | Path,
     contexto: ContextoAcademico | None = None,
-) -> list[dict]:
+) -> list[ResultadoPregunta]:
     """Procesa todos los archivos soportados de una carpeta recursivamente."""
     if contexto is None:
         contexto = ContextoAcademico()
@@ -289,7 +380,7 @@ def procesar_repositorio(
     print(f"# Contexto: {contexto.descripcion()}")
     print(f"{'#' * 60}\n")
 
-    todos: list[dict] = []
+    todos: list[ResultadoPregunta] = []
     for archivo in sorted(archivos):
         todos.extend(procesar_archivo(archivo, contexto))
 
@@ -316,9 +407,19 @@ if __name__ == "__main__":
     else:
         resultados = procesar_archivo(ruta, contexto)
 
+    from collections import Counter
+
+    conteo = Counter(r.veredicto.value for r in resultados)
+
     print(f"\n{'#' * 60}")
     print(f"# RESUMEN: {len(resultados)} preguntas generadas")
+    print(f"# Veredictos: {dict(conteo)}")
     print(f"{'#' * 60}\n")
     for i, r in enumerate(resultados, start=1):
-        print(f"\n--- Pregunta {i} [{r['tipo'].value}]: {r['unidad']} ---\n")
-        print(r["salida"])
+        print(f"\n{'-' * 60}")
+        print(f"Pregunta {i} [{r.tipo.value}] — {r.veredicto.value} — {r.unidad}")
+        print(f"{'-' * 60}")
+        print("\n>>> PREGUNTA GENERADA:\n")
+        print(r.pregunta_generada)
+        print("\n>>> REVISIÓN:\n")
+        print(r.comentario_revisor)
