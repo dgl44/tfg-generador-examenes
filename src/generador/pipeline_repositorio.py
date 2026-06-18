@@ -48,6 +48,7 @@ class ContextoAcademico:
     tipos_pregunta: list[TipoPregunta] = field(
         default_factory=lambda: [TipoPregunta.TEST]
     )
+    usar_revisor: bool = True  # False = solo generador (variante de ablación)
 
     def descripcion(self) -> str:
         return (
@@ -62,7 +63,8 @@ class Veredicto(str, Enum):
     APROBADA = "APROBADA"
     APROBADA_SUGERENCIAS = "APROBADA CON SUGERENCIAS"
     RECHAZADA = "RECHAZADA"
-    DESCONOCIDO = "DESCONOCIDO"  # no se pudo deducir del texto del revisor
+    SIN_REVISAR = "SIN REVISAR"   # el revisor estaba desactivado
+    DESCONOCIDO = "DESCONOCIDO"   # el revisor actuó pero no se pudo deducir
 
 
 @dataclass
@@ -127,8 +129,12 @@ def _construir_resultado(
     """Convierte la salida del crew (generar + revisar) en un resultado estructurado."""
     tareas = getattr(salida_crew, "tasks_output", None) or []
     pregunta = _texto_tarea(tareas[0]) if len(tareas) >= 1 else str(salida_crew).strip()
-    comentario = _texto_tarea(tareas[1]) if len(tareas) >= 2 else ""
-    veredicto = _extraer_veredicto(comentario) if comentario else Veredicto.DESCONOCIDO
+    if len(tareas) >= 2:
+        comentario = _texto_tarea(tareas[1])
+        veredicto = _extraer_veredicto(comentario)
+    else:
+        comentario = ""
+        veredicto = Veredicto.SIN_REVISAR
     return ResultadoPregunta(
         unidad=unidad,
         tipo=tipo,
@@ -278,34 +284,43 @@ def construir_crew_para_unidad(
         verbose=False,
     )
 
-    agente_revisor = Agent(
-        role="Revisor pedagógico de preguntas de examen",
-        goal="Validar que las preguntas son claras, técnicamente correctas y adecuadas al nivel.",
-        backstory=(
-            "Eres un coordinador docente experto en evaluación. Detectas errores "
-            "técnicos, ambigüedades y preguntas triviales, y devuelves un veredicto "
-            "claro con sugerencias concretas cuando es necesario."
-        ),
-        llm=llm_haiku,
-        verbose=False,
-    )
-
     tarea_generar = Task(
         description=desc_gen,
         expected_output=out_gen,
         agent=agente_generador,
     )
 
-    tarea_revisar = Task(
-        description=desc_rev,
-        expected_output=out_rev,
-        agent=agente_revisor,
-        context=[tarea_generar],
-    )
+    agentes = [agente_generador]
+    tareas = [tarea_generar]
+
+    # El revisor es opcional: desactivarlo da la variante "sin revisión"
+    # del estudio de ablación (objetivo 3).
+    if contexto.usar_revisor:
+        agente_revisor = Agent(
+            role="Revisor pedagógico de preguntas de examen",
+            goal="Validar que las preguntas son claras, técnicamente correctas y adecuadas al nivel.",
+            backstory=(
+                "Eres un coordinador docente experto en evaluación. Detectas errores "
+                "técnicos, ambigüedades y preguntas triviales, y devuelves un veredicto "
+                "claro con sugerencias concretas cuando es necesario."
+            ),
+            llm=llm_haiku,
+            verbose=False,
+        )
+
+        tarea_revisar = Task(
+            description=desc_rev,
+            expected_output=out_rev,
+            agent=agente_revisor,
+            context=[tarea_generar],
+        )
+
+        agentes.append(agente_revisor)
+        tareas.append(tarea_revisar)
 
     return Crew(
-        agents=[agente_generador, agente_revisor],
-        tasks=[tarea_generar, tarea_revisar],
+        agents=agentes,
+        tasks=tareas,
         process=Process.sequential,
         verbose=False,
     )
