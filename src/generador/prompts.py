@@ -21,26 +21,42 @@ class PromptsPregunta:
     output_revisar: str
 
 
-# Nota común a todos los revisores: el código se adjunta aparte en la capa de
-# presentación, así que el revisor no debe penalizar su ausencia en el enunciado.
-_NOTA_CODIGO_ADJUNTO = (
-    "Ten en cuenta que el código de la unidad se mostrará al estudiante "
-    "junto al enunciado, por lo que NO debes penalizar que la pregunta "
-    "no incluya literalmente el código.\n\n"
-)
-
 _OUTPUT_REVISAR = (
     "Veredicto (APROBADA / APROBADA CON SUGERENCIAS / RECHAZADA) "
     "seguido de un comentario detallado."
 )
 
 
-def _bloque_codigo(unidad: UnidadCodigo) -> str:
+def _codigo_plano(unidad: UnidadCodigo) -> str:
     docstring_info = f"\nDocstring: {unidad.docstring}" if unidad.docstring else ""
     return f"{docstring_info}\n\nCódigo:\n```\n{unidad.codigo}\n```"
 
 
-def _prompts_test(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregunta:
+def _bloque_codigo_generador(unidad: UnidadCodigo) -> str:
+    """Código para el generador, con la instrucción de no reproducirlo."""
+    return (
+        "\n\nEl siguiente código es únicamente para tu análisis. NO lo "
+        "reproduzcas ni lo cites textualmente en el enunciado: se mostrará al "
+        "estudiante junto a la pregunta. (Sí puedes incluir llamadas o "
+        "fragmentos nuevos que la pregunta necesite, como una secuencia de "
+        "ejecución a trazar.)"
+        f"{_codigo_plano(unidad)}"
+    )
+
+
+def _bloque_codigo_revisor(unidad: UnidadCodigo) -> str:
+    """Código para el revisor, para que pueda verificar la corrección."""
+    return (
+        "El código de la unidad sobre la que trata la pregunta es el "
+        "siguiente, y se mostrará también al estudiante junto al enunciado. "
+        "Úsalo para verificar la corrección técnica de la pregunta y de su "
+        "respuesta. NO consideres un defecto que el enunciado no reproduzca el "
+        "código: el estudiante lo tendrá delante."
+        f"{_codigo_plano(unidad)}\n\n"
+    )
+
+
+def _prompts_test(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> PromptsPregunta:
     return PromptsPregunta(
         desc_generar=(
             f"Contexto: pregunta para {desc}.\n\n"
@@ -48,7 +64,7 @@ def _prompts_test(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregun
             "UNA pregunta tipo test con 4 opciones (A, B, C, D), donde solo una "
             f"es correcta. La pregunta debe evaluar comprensión a nivel {nivel}, "
             "no sintaxis trivial. Indica la respuesta correcta y justifica brevemente."
-            f"{codigo_bloque}"
+            f"{codigo_gen}"
         ),
         output_generar=(
             "Una pregunta tipo test con enunciado claro, 4 opciones etiquetadas "
@@ -56,7 +72,7 @@ def _prompts_test(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregun
         ),
         desc_revisar=(
             f"Contexto: la pregunta es para {desc}.\n\n"
-            f"{_NOTA_CODIGO_ADJUNTO}"
+            f"{codigo_rev}"
             "Revisa la pregunta evaluando:\n"
             "1. ¿El enunciado es claro y preciso?\n"
             "2. ¿Las 4 opciones están bien planteadas (una correcta inequívoca, "
@@ -71,7 +87,7 @@ def _prompts_test(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregun
     )
 
 
-def _prompts_traza(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregunta:
+def _prompts_traza(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> PromptsPregunta:
     return PromptsPregunta(
         desc_generar=(
             f"Contexto: pregunta de traza para {desc}.\n\n"
@@ -81,7 +97,7 @@ def _prompts_traza(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregu
             "el estudiante (valor de retorno, valor de una variable en un punto dado, "
             "o salida impresa). Incluye la respuesta correcta y explica el razonamiento "
             "paso a paso."
-            f"{codigo_bloque}"
+            f"{codigo_gen}"
         ),
         output_generar=(
             "Enunciado con la llamada concreta, pregunta clara sobre el resultado "
@@ -89,7 +105,7 @@ def _prompts_traza(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregu
         ),
         desc_revisar=(
             f"Contexto: pregunta de traza para {desc}.\n\n"
-            f"{_NOTA_CODIGO_ADJUNTO}"
+            f"{codigo_rev}"
             "Revisa la pregunta evaluando:\n"
             "1. ¿La llamada de ejemplo es válida para el código dado?\n"
             "2. ¿La respuesta esperada es determinista e inequívoca?\n"
@@ -101,7 +117,7 @@ def _prompts_traza(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregu
     )
 
 
-def _prompts_abierta(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPregunta:
+def _prompts_abierta(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> PromptsPregunta:
     return PromptsPregunta(
         desc_generar=(
             f"Contexto: pregunta abierta para {desc}.\n\n"
@@ -110,7 +126,7 @@ def _prompts_abierta(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPre
             "sobre el código: explicar una decisión de diseño, describir el propósito "
             "de un bloque concreto, identificar una limitación, o proponer cómo "
             "extenderlo para un nuevo requisito. Incluye una respuesta modelo orientativa."
-            f"{codigo_bloque}"
+            f"{codigo_gen}"
         ),
         output_generar=(
             "Pregunta abierta con enunciado claro y una respuesta modelo orientativa "
@@ -118,7 +134,7 @@ def _prompts_abierta(unidad, tipo_str, codigo_bloque, desc, nivel) -> PromptsPre
         ),
         desc_revisar=(
             f"Contexto: pregunta abierta para {desc}.\n\n"
-            f"{_NOTA_CODIGO_ADJUNTO}"
+            f"{codigo_rev}"
             "Revisa la pregunta evaluando:\n"
             "1. ¿El enunciado está bien delimitado (no es demasiado vago)?\n"
             "2. ¿La respuesta modelo es técnicamente correcta?\n"
@@ -147,6 +163,7 @@ def construir_prompts(
 ) -> PromptsPregunta:
     """Devuelve las piezas de prompt para generar y revisar una pregunta."""
     tipo_str = "función" if unidad.tipo == "funcion" else "clase"
-    codigo_bloque = _bloque_codigo(unidad)
+    codigo_gen = _bloque_codigo_generador(unidad)
+    codigo_rev = _bloque_codigo_revisor(unidad)
     constructor = _CONSTRUCTORES[tipo_pregunta]
-    return constructor(unidad, tipo_str, codigo_bloque, desc, nivel)
+    return constructor(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel)
