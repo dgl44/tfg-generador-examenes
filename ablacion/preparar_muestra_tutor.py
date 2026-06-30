@@ -17,11 +17,15 @@ REPO = Path(__file__).resolve().parent.parent
 RESULTADOS = REPO / "ablacion" / "resultados_ablacion_v2.json"
 JUEZ = REPO / "ablacion" / "evaluacion_juez_v2_obj.json"
 
-# Cuántas preguntas tomar de cada proyecto
+import sys  # noqa: E402
+sys.path.insert(0, str(REPO / "src" / "generador"))
+from examen_comun import enunciado_visible  # noqa: E402
+
+# Cuántas preguntas tomar de cada proyecto (muestra ligera, con peso en SI)
 CUPOS = {
-    "SI-P1 (busqueda heuristica)": 5,
-    "Taxis Release 2 (SD)": 3,
-    "Prog3 (POO Java)": 3,
+    "SI-P1 (busqueda heuristica)": 3,
+    "Taxis Release 2 (SD)": 1,
+    "Prog3 (POO Java)": 2,
 }
 
 CONTEXTO_PROYECTOS = """\
@@ -36,15 +40,16 @@ El código del que parten las preguntas son prácticas reales mías de la carrer
 """
 
 RUBRICA = """\
-Por favor, marca cada pregunta como **BUENA** o **DEFECTUOSA**. El criterio que
-te pido (céntrate en defectos objetivos, no en si es mejorable de estilo):
+Para cada pregunta, dime si la usarías para evaluar si el alumno comprende su
+propio código, según tu criterio docente:
 
-- **DEFECTUOSA** si: es técnicamente incorrecta (la respuesta marcada no cuadra
-  con el código), es ambigua (en test, varias o ninguna opción correcta), o su
-  respuesta no se puede verificar con el código mostrado.
-- **BUENA** en cualquier otro caso (aunque te parezca sencilla o mejorable).
+- **Sí**: la pondría tal cual.
+- **Con retoques**: la idea es buena pero la ajustaría.
+- **No**: no me parece adecuada.
 
-Si quieres, añade una nota breve en las que marques defectuosa. ¡Gracias!
+No hace falta que verifiques tecnicismos ni la respuesta; me interesa tu juicio
+sobre si es una buena pregunta. Una nota breve en las dudosas me viene genial.
+¡Gracias!
 """
 
 NOMBRE_LEGIBLE = {
@@ -55,27 +60,23 @@ NOMBRE_LEGIBLE = {
 
 
 def seleccionar(resultados, juez):
-    """Selección determinista: cupo por proyecto, asegurando algunas preguntas
-    que el juez marcó DEFECTUOSA (para poder medir el acuerdo en casos malos) y
-    diversificando el tipo de pregunta."""
+    """Selección determinista y representativa: cupo por proyecto, diversificando
+    el tipo de pregunta. No se sesga por la etiqueta del juez (es una muestra para
+    el juicio pedagógico del docente, no para validar al juez)."""
     seleccion = []
     for proyecto, cupo in CUPOS.items():
         items = sorted([r for r in resultados if r["proyecto"] == proyecto],
                        key=lambda r: r["nombre"])
         elegidos = []
-        # 1) Incluir hasta 2 defectuosas (si las hay) para tener casos discriminantes
-        for r in [x for x in items if juez.get(x["nombre"]) == "DEFECTUOSA"][:2]:
-            if len(elegidos) < cupo:
-                elegidos.append(r)
-        # 2) Diversificar tipo de pregunta con el resto
-        tipos_vistos = [e["tipo_pregunta"] for e in elegidos]
+        # 1) Diversificar tipo de pregunta
+        tipos_vistos = []
         for r in items:
             if len(elegidos) >= cupo:
                 break
-            if r not in elegidos and r["tipo_pregunta"] not in tipos_vistos:
+            if r["tipo_pregunta"] not in tipos_vistos:
                 elegidos.append(r)
                 tipos_vistos.append(r["tipo_pregunta"])
-        # 3) Completar cupo
+        # 2) Completar cupo
         for r in items:
             if len(elegidos) >= cupo:
                 break
@@ -120,10 +121,10 @@ def escribir_docx(seleccion, ruta):
         doc.add_paragraph(f"Procedencia: {NOMBRE_LEGIBLE[r['proyecto']]} — {r['nombre']}")
         doc.add_paragraph("Código:")
         _add_codigo(doc, r["codigo"])
-        doc.add_paragraph("Pregunta generada:")
-        doc.add_paragraph(r["pregunta_generada"])
+        doc.add_paragraph("Enunciado (lo que vería el alumno):")
+        doc.add_paragraph(enunciado_visible(r["pregunta_generada"]))
         p = doc.add_paragraph()
-        p.add_run("Tu valoración (BUENA / DEFECTUOSA): ").bold = True
+        p.add_run("¿La usarías para evaluar la comprensión del alumno? (Sí / Con retoques / No): ").bold = True
         p.add_run("____________")
         doc.add_paragraph("Nota (opcional):")
 
@@ -150,9 +151,9 @@ def main():
         md.append(f"*Procedencia: {NOMBRE_LEGIBLE[r['proyecto']]} — `{r['nombre']}`*\n")
         md.append("**Código:**\n")
         md.append(f"```\n{r['codigo']}\n```\n")
-        md.append("**Pregunta generada:**\n")
-        md.append(f"{r['pregunta_generada']}\n")
-        md.append("\n> **Tu valoración (BUENA / DEFECTUOSA):** ____________\n")
+        md.append("**Enunciado (lo que vería el alumno):**\n")
+        md.append(f"{enunciado_visible(r['pregunta_generada'])}\n")
+        md.append("\n> **¿La usarías para evaluar la comprensión del alumno? (Sí / Con retoques / No):** ____________\n")
         md.append("> Nota (opcional): \n\n---\n")
         plantilla.append(f"{i:02d}=")
         clave.append({"n": i, "nombre": r["nombre"], "proyecto": r["proyecto"],
