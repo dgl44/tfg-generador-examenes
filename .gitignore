@@ -35,3 +35,9 @@ Thumbs.db
 output/
 data/
 *.log
+
+# Datos del estudio de ablacion (codigo de practicas y resultados): no versionar,
+# solo se suben los scripts (.py)
+ablacion/*.json
+ablacion/*.md
+ablacion/*.txt
