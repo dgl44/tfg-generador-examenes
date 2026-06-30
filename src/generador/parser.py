@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import tree_sitter_java as tsjava
 import tree_sitter_python as tspython
 from tree_sitter import Language, Node, Parser
 
@@ -19,12 +20,18 @@ _TIPOS_RAMA = {
     "try_statement", "with_statement",
 }
 
+_TIPOS_RAMA_JAVA = {
+    "if_statement", "for_statement", "enhanced_for_statement",
+    "while_statement", "do_statement", "try_statement",
+    "catch_clause", "switch_expression", "switch_statement",
+}
 
-def _contar_ramas(nodo: Node) -> int:
+
+def _contar_ramas(nodo: Node, tipos: set[str] = _TIPOS_RAMA) -> int:
     """Cuenta recursivamente los nodos de control de flujo en un subárbol."""
-    total = 1 if nodo.type in _TIPOS_RAMA else 0
+    total = 1 if nodo.type in tipos else 0
     for child in nodo.children:
-        total += _contar_ramas(child)
+        total += _contar_ramas(child, tipos)
     return total
 
 
@@ -32,7 +39,7 @@ def _contar_ramas(nodo: Node) -> int:
 class UnidadCodigo:
     """Una función o clase extraída de un archivo de código fuente."""
 
-    tipo: str          # "funcion" | "clase"
+    tipo: str          # "funcion" | "clase" | "metodo"
     nombre: str
     codigo: str        # Código fuente completo de la unidad
     docstring: str | None
@@ -80,11 +87,22 @@ def _extraer_docstring_py(nodo: Node, fuente: bytes) -> str | None:
     return None
 
 
-def _definicion_py(nodo: Node, fuente: bytes, tipo: str) -> UnidadCodigo:
-    nombre_nodo = nodo.child_by_field_name("name")
+# Una clase con más líneas que este umbral se considera demasiado grande para
+# evaluarla como un todo: en su lugar se extraen sus métodos individualmente.
+_MAX_LINEAS_CLASE_ENTERA = 40
+
+
+def _nombre(nodo: Node, fuente: bytes) -> str:
+    return _texto(nodo.child_by_field_name("name"), fuente)
+
+
+def _definicion_py(
+    nodo: Node, fuente: bytes, tipo: str, prefijo: str = ""
+) -> UnidadCodigo:
+    nombre = _nombre(nodo, fuente)
     return UnidadCodigo(
         tipo=tipo,
-        nombre=_texto(nombre_nodo, fuente),
+        nombre=f"{prefijo}{nombre}" if prefijo else nombre,
         codigo=_texto(nodo, fuente),
         docstring=_extraer_docstring_py(nodo, fuente),
         linea_inicio=nodo.start_point[0] + 1,
@@ -93,24 +111,129 @@ def _definicion_py(nodo: Node, fuente: bytes, tipo: str) -> UnidadCodigo:
     )
 
 
+def _desenvolver(nodo: Node) -> Node:
+    """Devuelve la definición interna si el nodo lleva decoradores."""
+    if nodo.type == "decorated_definition":
+        inner = nodo.child_by_field_name("definition")
+        return inner if inner is not None else nodo
+    return nodo
+
+
+def _es_dunder(nombre: str) -> bool:
+    return nombre.startswith("__") and nombre.endswith("__")
+
+
+def _extraer_clase(nodo: Node, fuente: bytes, unidades: list[UnidadCodigo]) -> None:
+    """Añade una clase como unidad si es pequeña; si es grande, sus métodos.
+
+    Una clase pequeña y cohesionada se evalúa como un todo; una clase extensa
+    se descompone en sus métodos con lógica, que llevan el nombre `Clase.metodo`
+    para conservar el contexto. Los métodos especiales (dunder) se omiten.
+    """
+    lineas = nodo.end_point[0] - nodo.start_point[0] + 1
+    if lineas <= _MAX_LINEAS_CLASE_ENTERA:
+        unidades.append(_definicion_py(nodo, fuente, "clase"))
+        return
+
+    nombre_clase = _nombre(nodo, fuente)
+    body = nodo.child_by_field_name("body")
+    if body is None:
+        return
+    for hijo in body.children:
+        metodo = _desenvolver(hijo)
+        if metodo.type != "function_definition":
+            continue
+        if _es_dunder(_nombre(metodo, fuente)):
+            continue
+        unidades.append(
+            _definicion_py(metodo, fuente, "metodo", prefijo=f"{nombre_clase}.")
+        )
+
+
 def _extraer_python(ruta: Path) -> list[UnidadCodigo]:
     fuente = ruta.read_bytes()
     tree = _PY_PARSER.parse(fuente)
     unidades: list[UnidadCodigo] = []
 
     for nodo in tree.root_node.children:
-        if nodo.type == "function_definition":
-            unidades.append(_definicion_py(nodo, fuente, "funcion"))
-        elif nodo.type == "class_definition":
-            unidades.append(_definicion_py(nodo, fuente, "clase"))
-        elif nodo.type == "decorated_definition":
-            # Función o clase con decoradores (@dataclass, @staticmethod, etc.)
-            inner = nodo.child_by_field_name("definition")
-            if inner is not None:
-                if inner.type == "function_definition":
-                    unidades.append(_definicion_py(inner, fuente, "funcion"))
-                elif inner.type == "class_definition":
-                    unidades.append(_definicion_py(inner, fuente, "clase"))
+        # Funciones y clases de nivel superior, lleven o no decoradores.
+        definicion = _desenvolver(nodo)
+        if definicion.type == "function_definition":
+            unidades.append(_definicion_py(definicion, fuente, "funcion"))
+        elif definicion.type == "class_definition":
+            _extraer_clase(definicion, fuente, unidades)
+
+    return unidades
+
+
+# ---------------------------------------------------------------------------
+# Backend: Java
+# ---------------------------------------------------------------------------
+
+_JAVA_LANGUAGE = Language(tsjava.language())
+_JAVA_PARSER = Parser(_JAVA_LANGUAGE)
+
+
+def _javadoc_java(nodo: Node, fuente: bytes) -> str | None:
+    """Extrae el Javadoc (bloque /** */) que precede a la declaración, si existe."""
+    previo = nodo.prev_named_sibling
+    if previo is None or previo.type != "block_comment":
+        return None
+    crudo = _texto(previo, fuente)
+    if not crudo.startswith("/**"):
+        return None
+    cuerpo = crudo.removeprefix("/**").removesuffix("*/")
+    lineas = [ln.strip().lstrip("*").strip() for ln in cuerpo.splitlines()]
+    return "\n".join(ln for ln in lineas if ln).strip() or None
+
+
+def _definicion_java(
+    nodo: Node, fuente: bytes, tipo: str, prefijo: str = ""
+) -> UnidadCodigo:
+    nombre = _nombre(nodo, fuente)
+    return UnidadCodigo(
+        tipo=tipo,
+        nombre=f"{prefijo}{nombre}" if prefijo else nombre,
+        codigo=_texto(nodo, fuente),
+        docstring=_javadoc_java(nodo, fuente),
+        linea_inicio=nodo.start_point[0] + 1,
+        linea_fin=nodo.end_point[0] + 1,
+        num_ramas=_contar_ramas(nodo, _TIPOS_RAMA_JAVA),
+    )
+
+
+def _extraer_tipo_java(nodo: Node, fuente: bytes, unidades: list[UnidadCodigo]) -> None:
+    """Añade una clase/interfaz pequeña entera; si es grande, sus métodos.
+
+    Mismo criterio que en Python: una clase pequeña se evalúa como un todo y una
+    extensa se descompone en sus métodos (nombrados `Clase.metodo`). En Java no
+    hay métodos especiales tipo dunder; los accesores triviales los descarta el
+    filtro posterior.
+    """
+    lineas = nodo.end_point[0] - nodo.start_point[0] + 1
+    if lineas <= _MAX_LINEAS_CLASE_ENTERA:
+        unidades.append(_definicion_java(nodo, fuente, "clase"))
+        return
+
+    nombre_tipo = _nombre(nodo, fuente)
+    body = nodo.child_by_field_name("body")
+    if body is None:
+        return
+    for hijo in body.children:
+        if hijo.type == "method_declaration":
+            unidades.append(
+                _definicion_java(hijo, fuente, "metodo", prefijo=f"{nombre_tipo}.")
+            )
+
+
+def _extraer_java(ruta: Path) -> list[UnidadCodigo]:
+    fuente = ruta.read_bytes()
+    tree = _JAVA_PARSER.parse(fuente)
+    unidades: list[UnidadCodigo] = []
+
+    for nodo in tree.root_node.children:
+        if nodo.type in ("class_declaration", "interface_declaration"):
+            _extraer_tipo_java(nodo, fuente, unidades)
 
     return unidades
 
@@ -119,19 +242,14 @@ def _extraer_python(ruta: Path) -> list[UnidadCodigo]:
 # Registro de backends — añadir soporte para un nuevo lenguaje aquí
 # ---------------------------------------------------------------------------
 #
-# Cada backend es una función Path -> list[UnidadCodigo].
-# Para añadir Java, por ejemplo:
-#   1. pip install tree-sitter-java
-#   2. Implementar _extraer_java(ruta) siguiendo el mismo patrón
-#   3. Registrar: ".java": _extraer_java
+# Cada backend es una función Path -> list[UnidadCodigo]. Añadir un lenguaje se
+# reduce a implementar su _extraer_X siguiendo el mismo patrón y registrarlo aquí.
 
 BackendFn = Callable[[Path], list[UnidadCodigo]]
 
 _BACKENDS: dict[str, BackendFn] = {
     ".py": _extraer_python,
-    # ".java": _extraer_java,
-    # ".cpp": _extraer_cpp,
-    # ".js": _extraer_javascript,
+    ".java": _extraer_java,
 }
 
 

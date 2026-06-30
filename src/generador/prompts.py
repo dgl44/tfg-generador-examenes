@@ -27,6 +27,23 @@ _OUTPUT_REVISAR = (
 )
 
 
+# Criterio común de veredicto: empuja al revisor a mojarse en lugar de refugiarse
+# en "APROBADA CON SUGERENCIAS" ante un defecto real.
+_CRITERIO_VEREDICTO = (
+    "Sé exigente y mójate con el veredicto; no te quedes en un término medio "
+    "cómodo:\n"
+    "- RECHAZADA: si la pregunta o su respuesta tienen cualquier defecto que las "
+    "haga no aptas tal cual (error técnico, respuesta marcada incorrecta, "
+    "ambigüedad, enunciado confuso, ninguna o más de una opción correcta, o "
+    "dificultad inadecuada). Ante la duda sobre su corrección, RECHAZADA.\n"
+    "- APROBADA CON SUGERENCIAS: solo si la pregunta YA es válida y utilizable tal "
+    "cual, y tus comentarios son mejoras opcionales de estilo o redacción.\n"
+    "- APROBADA: si es correcta y no necesita cambios.\n"
+    "Empieza tu respuesta con una línea exactamente así:\n"
+    "VEREDICTO: <APROBADA | APROBADA CON SUGERENCIAS | RECHAZADA>"
+)
+
+
 def _codigo_plano(unidad: UnidadCodigo) -> str:
     docstring_info = f"\nDocstring: {unidad.docstring}" if unidad.docstring else ""
     return f"{docstring_info}\n\nCódigo:\n```\n{unidad.codigo}\n```"
@@ -81,7 +98,7 @@ def _prompts_test(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> Prom
             "4. ¿La justificación del generador es correcta?\n"
             f"5. ¿El nivel de dificultad es apropiado para {desc}? "
             "Rechaza preguntas trivialmente obvias para ese nivel.\n\n"
-            "Veredicto: APROBADA, APROBADA CON SUGERENCIAS o RECHAZADA."
+            + _CRITERIO_VEREDICTO
         ),
         output_revisar=_OUTPUT_REVISAR,
     )
@@ -111,7 +128,7 @@ def _prompts_traza(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> Pro
             "2. ¿La respuesta esperada es determinista e inequívoca?\n"
             "3. ¿El razonamiento paso a paso es correcto?\n"
             f"4. ¿La dificultad es adecuada para nivel {nivel}?\n\n"
-            "Veredicto: APROBADA, APROBADA CON SUGERENCIAS o RECHAZADA."
+            + _CRITERIO_VEREDICTO
         ),
         output_revisar=_OUTPUT_REVISAR,
     )
@@ -141,7 +158,7 @@ def _prompts_abierta(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> P
             "3. ¿La pregunta requiere comprensión real del código, no solo lectura "
             "superficial?\n"
             f"4. ¿La dificultad es adecuada para nivel {nivel}?\n\n"
-            "Veredicto: APROBADA, APROBADA CON SUGERENCIAS o RECHAZADA."
+            + _CRITERIO_VEREDICTO
         ),
         output_revisar=_OUTPUT_REVISAR,
     )
@@ -162,7 +179,7 @@ def construir_prompts(
     nivel: str,
 ) -> PromptsPregunta:
     """Devuelve las piezas de prompt para generar y revisar una pregunta."""
-    tipo_str = "función" if unidad.tipo == "funcion" else "clase"
+    tipo_str = {"funcion": "función", "metodo": "método"}.get(unidad.tipo, "clase")
     codigo_gen = _bloque_codigo_generador(unidad)
     codigo_rev = _bloque_codigo_revisor(unidad)
     constructor = _CONSTRUCTORES[tipo_pregunta]
