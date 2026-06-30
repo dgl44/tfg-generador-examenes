@@ -10,6 +10,9 @@ Genera:
 import json
 from pathlib import Path
 
+from docx import Document
+from docx.shared import Pt, RGBColor
+
 REPO = Path(__file__).resolve().parent.parent
 RESULTADOS = REPO / "ablacion" / "resultados_ablacion_v2.json"
 JUEZ = REPO / "ablacion" / "evaluacion_juez_v2_obj.json"
@@ -82,6 +85,51 @@ def seleccionar(resultados, juez):
     return seleccion
 
 
+def _add_codigo(doc, codigo):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(6)
+    run = p.add_run()
+    run.font.name = "Consolas"
+    run.font.size = Pt(9)
+    run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+    for i, linea in enumerate(codigo.split("\n")):
+        if i:
+            run.add_break()
+        run.add_text(linea)
+
+
+def escribir_docx(seleccion, ruta):
+    """Genera la muestra en Word, lista para que el tutor la lea y rellene."""
+    doc = Document()
+    doc.add_heading("Validación de preguntas generadas — TFG", level=0)
+    doc.add_paragraph(
+        "Hola Fidel. Te paso una muestra de preguntas que ha generado la "
+        "herramienta sobre código de prácticas mías, para que me des tu criterio "
+        "de docente sobre su calidad.")
+    doc.add_heading("De dónde sale el código", level=1)
+    for linea in CONTEXTO_PROYECTOS.replace("**", "").splitlines():
+        if linea.strip():
+            doc.add_paragraph(linea.strip(), style="List Bullet" if linea.strip().startswith("-") else None)
+    doc.add_heading("Qué te pido", level=1)
+    for linea in RUBRICA.replace("**", "").splitlines():
+        if linea.strip():
+            doc.add_paragraph(linea.strip())
+
+    for i, r in enumerate(seleccion, start=1):
+        doc.add_heading(f"Pregunta {i:02d}", level=2)
+        doc.add_paragraph(f"Procedencia: {NOMBRE_LEGIBLE[r['proyecto']]} — {r['nombre']}")
+        doc.add_paragraph("Código:")
+        _add_codigo(doc, r["codigo"])
+        doc.add_paragraph("Pregunta generada:")
+        doc.add_paragraph(r["pregunta_generada"])
+        p = doc.add_paragraph()
+        p.add_run("Tu valoración (BUENA / DEFECTUOSA): ").bold = True
+        p.add_run("____________")
+        doc.add_paragraph("Nota (opcional):")
+
+    doc.save(ruta)
+
+
 def main():
     resultados = [r for r in json.loads(RESULTADOS.read_text(encoding="utf-8"))
                   if "error" not in r]
@@ -110,6 +158,8 @@ def main():
         clave.append({"n": i, "nombre": r["nombre"], "proyecto": r["proyecto"],
                       "lenguaje": r["lenguaje"], "tipo_pregunta": r["tipo_pregunta"],
                       "etiqueta_juez": juez.get(r["nombre"], "?")})
+
+    escribir_docx(seleccion, REPO / "ablacion" / "muestra_tutor.docx")
 
     (REPO / "ablacion" / "muestra_tutor.md").write_text("\n".join(md), encoding="utf-8")
     (REPO / "ablacion" / "respuestas_tutor.txt").write_text(
