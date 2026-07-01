@@ -90,15 +90,10 @@ def main():
     print(f"Unidades propias (sin plantilla, no triviales): {len(unidades)}")
 
     doc = Document()
-    doc.add_heading("Validación de preguntas generadas (2ª muestra) — TFG", level=0)
+    doc.add_heading("Muestra de preguntas (2ª) — TFG", level=0)
     doc.add_paragraph(
-        "Hola Fidel. Tras tu feedback anterior, la herramienta ahora descarta el "
-        "código de la plantilla y genera preguntas solo sobre lo que ha escrito el "
-        "alumno. Esta muestra es solo de Sistemas Inteligentes y solo con mi propio "
-        "código de la práctica de búsqueda heurística (A* y A*epsilon).")
-    doc.add_heading("Qué te pido", level=1)
-    for linea in RUBRICA:
-        doc.add_paragraph(linea)
+        "Para cada pregunta, indica si la usarías para evaluar la comprensión del "
+        "alumno: Sí / Con retoques / No (y una nota breve si quieres).")
 
     for i, unidad in enumerate(unidades, start=1):
         tipo = TIPOS[(i - 1) % len(TIPOS)]
