@@ -19,7 +19,7 @@ from modelos import (
     TipoPregunta,
     Veredicto,
 )
-from parser import UnidadCodigo, extraer_unidades, lenguajes_soportados
+from parser import UnidadCodigo, extraer_unidades, firma_unidad, lenguajes_soportados
 
 
 # Directorios que no contienen código del alumno
@@ -62,24 +62,51 @@ def _construir_resultado(
 
 # ------------------------- Pipeline principal -------------------------
 
+def firmas_de_plantilla(ruta_plantilla: str | Path) -> set[str]:
+    """Recopila las firmas de todas las unidades de un proyecto de plantilla.
+
+    Sirve para descartar el código base que proporciona el docente: las unidades
+    del alumno cuya firma coincida con la plantilla no se han escrito (o no se han
+    modificado) y no procede evaluarlas.
+    """
+    carpeta = Path(ruta_plantilla)
+    firmas: set[str] = set()
+    for archivo in carpeta.rglob("*"):
+        if archivo.is_file() and archivo.suffix in set(lenguajes_soportados()):
+            firmas.update(firma_unidad(u) for u in extraer_unidades(archivo))
+    return firmas
+
+
 def procesar_archivo(
     ruta_archivo: str | Path,
     contexto: ContextoAcademico | None = None,
+    firmas_plantilla: set[str] | None = None,
 ) -> list[ResultadoPregunta]:
-    """Procesa un archivo: extrae unidades, filtra triviales y genera+revisa preguntas."""
+    """Procesa un archivo: extrae unidades, filtra triviales y genera+revisa preguntas.
+
+    Si se pasan ``firmas_plantilla``, se descartan además las unidades idénticas a
+    las de la plantilla (código base que el alumno no ha escrito).
+    """
     if contexto is None:
         contexto = ContextoAcademico()
+    firmas_plantilla = firmas_plantilla or set()
 
     unidades = extraer_unidades(ruta_archivo)
 
+    def es_plantilla(u):
+        return firma_unidad(u) in firmas_plantilla
+
     triviales = [u for u in unidades if u.es_trivial()]
-    a_procesar = [u for u in unidades if not u.es_trivial()]
+    de_plantilla = [u for u in unidades if not u.es_trivial() and es_plantilla(u)]
+    a_procesar = [u for u in unidades if not u.es_trivial() and not es_plantilla(u)]
 
     print(f"\n{'#' * 60}")
     print(f"# Encontradas {len(unidades)} unidades en {ruta_archivo}")
     print(f"# Contexto: {contexto.descripcion()}")
     if triviales:
         print(f"# Descartadas {len(triviales)} triviales: {[u.nombre for u in triviales]}")
+    if de_plantilla:
+        print(f"# Descartadas {len(de_plantilla)} de plantilla: {[u.nombre for u in de_plantilla]}")
     print(f"# A procesar: {len(a_procesar)}")
     print(f"{'#' * 60}\n")
 
@@ -100,13 +127,20 @@ def procesar_archivo(
 def procesar_repositorio(
     ruta_carpeta: str | Path,
     contexto: ContextoAcademico | None = None,
+    ruta_plantilla: str | Path | None = None,
 ) -> list[ResultadoPregunta]:
-    """Procesa todos los archivos soportados de una carpeta recursivamente."""
+    """Procesa todos los archivos soportados de una carpeta recursivamente.
+
+    Si se indica ``ruta_plantilla`` (el código base que entrega el docente), se
+    descartan las unidades del alumno idénticas a las de esa plantilla, de modo
+    que solo se evalúa el código que el estudiante ha escrito o modificado.
+    """
     if contexto is None:
         contexto = ContextoAcademico()
 
     carpeta = Path(ruta_carpeta)
     extensiones = set(lenguajes_soportados())
+    firmas_plantilla = firmas_de_plantilla(ruta_plantilla) if ruta_plantilla else set()
 
     archivos = [
         p for p in carpeta.rglob("*")
@@ -119,10 +153,12 @@ def procesar_repositorio(
     print(f"# Repositorio: {carpeta}")
     print(f"# Archivos encontrados: {len(archivos)}")
     print(f"# Contexto: {contexto.descripcion()}")
+    if firmas_plantilla:
+        print(f"# Plantilla: {ruta_plantilla} ({len(firmas_plantilla)} unidades base)")
     print(f"{'#' * 60}\n")
 
     todos: list[ResultadoPregunta] = []
     for archivo in sorted(archivos):
-        todos.extend(procesar_archivo(archivo, contexto))
+        todos.extend(procesar_archivo(archivo, contexto, firmas_plantilla))
 
     return todos

@@ -274,6 +274,22 @@ def extraer_unidades(ruta: str | Path) -> list[UnidadCodigo]:
     return backend(ruta)
 
 
+def _codigo_normalizado(codigo: str) -> str:
+    """Normaliza el código para comparar unidades: ignora espacios y líneas vacías."""
+    return "\n".join(linea.strip() for linea in codigo.splitlines() if linea.strip())
+
+
+def firma_unidad(unidad: UnidadCodigo) -> str:
+    """Firma de una unidad (nombre + código normalizado).
+
+    Permite reconocer una misma unidad entre dos versiones del proyecto. Se usa
+    para descartar el código de plantilla: una unidad idéntica a la de la
+    plantilla comparte firma; si el alumno la modificó, la firma cambia y se
+    conserva como trabajo suyo.
+    """
+    return f"{unidad.nombre}\n{_codigo_normalizado(unidad.codigo)}"
+
+
 if __name__ == "__main__":
     import sys
 

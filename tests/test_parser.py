@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from generador import extraer_unidades, lenguajes_soportados, UnidadCodigo
+from generador import extraer_unidades, lenguajes_soportados, UnidadCodigo, firma_unidad
 
 EJEMPLO = Path(__file__).parent.parent / "ejemplos" / "ejemplo_simple.py"
 
@@ -215,6 +215,29 @@ public class Servicio {
     }
 }
 """
+
+
+def _u(nombre, codigo):
+    return UnidadCodigo(tipo="funcion", nombre=nombre, codigo=codigo, docstring=None,
+                        linea_inicio=1, linea_fin=2, num_ramas=0)
+
+
+def test_firma_igual_para_codigo_identico():
+    a = _u("f", "def f():\n    return 1")
+    b = _u("f", "def f():\n    return 1")
+    assert firma_unidad(a) == firma_unidad(b)
+
+
+def test_firma_ignora_espacios_y_lineas_vacias():
+    a = _u("f", "def f():\n    return 1")
+    b = _u("f", "def f():\n\n    return 1   \n")
+    assert firma_unidad(a) == firma_unidad(b)
+
+
+def test_firma_distinta_si_cambia_el_codigo():
+    plantilla = _u("f", "def f():\n    pass")   # stub de la plantilla
+    alumno = _u("f", "def f():\n    return 42")  # implementado por el alumno
+    assert firma_unidad(plantilla) != firma_unidad(alumno)
 
 
 def test_java_soportado():

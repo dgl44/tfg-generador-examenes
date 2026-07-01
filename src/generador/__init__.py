@@ -21,7 +21,12 @@ from modelos import (  # noqa: E402
     TipoPregunta,
     Veredicto,
 )
-from parser import UnidadCodigo, extraer_unidades, lenguajes_soportados  # noqa: E402
+from parser import (  # noqa: E402
+    UnidadCodigo,
+    extraer_unidades,
+    firma_unidad,
+    lenguajes_soportados,
+)
 from pipeline import procesar_archivo, procesar_repositorio  # noqa: E402
 
 __all__ = [
@@ -31,6 +36,7 @@ __all__ = [
     "ResultadoPregunta",
     "UnidadCodigo",
     "extraer_unidades",
+    "firma_unidad",
     "lenguajes_soportados",
     "procesar_archivo",
     "procesar_repositorio",
