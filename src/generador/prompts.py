@@ -139,10 +139,14 @@ def _prompts_abierta(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> P
         desc_generar=(
             f"Contexto: pregunta abierta para {desc}.\n\n"
             f"Analiza la siguiente {tipo_str} llamada '{unidad.nombre}'. "
-            "Formula UNA pregunta abierta corta que requiera al estudiante razonar "
-            "sobre el código: explicar una decisión de diseño, describir el propósito "
-            "de un bloque concreto, identificar una limitación, o proponer cómo "
-            "extenderlo para un nuevo requisito. Incluye una respuesta modelo orientativa."
+            "Formula UNA pregunta abierta corta que requiera al estudiante "
+            "demostrar que COMPRENDE el código: explicar qué hace un bloque concreto "
+            "y con qué fin, justificar por qué se ha resuelto de la manera en que "
+            "está escrito, o describir el efecto de una parte del código sobre los "
+            "datos. NO pidas proponer mejoras, refactorizaciones ni identificar "
+            "limitaciones o defectos: el objetivo es evaluar la comprensión del "
+            "código tal como está, no que el estudiante lo modifique o lo critique. "
+            "Incluye una respuesta modelo orientativa."
             f"{codigo_gen}"
         ),
         output_generar=(
@@ -157,7 +161,10 @@ def _prompts_abierta(unidad, tipo_str, codigo_gen, codigo_rev, desc, nivel) -> P
             "2. ¿La respuesta modelo es técnicamente correcta?\n"
             "3. ¿La pregunta requiere comprensión real del código, no solo lectura "
             "superficial?\n"
-            f"4. ¿La dificultad es adecuada para nivel {nivel}?\n\n"
+            f"4. ¿La dificultad es adecuada para nivel {nivel}?\n"
+            "5. ¿Se limita a evaluar la comprensión del código tal como está, sin "
+            "pedir mejoras, refactorizaciones ni identificar limitaciones o "
+            "defectos? Si las pide, recházala.\n\n"
             + _CRITERIO_VEREDICTO
         ),
         output_revisar=_OUTPUT_REVISAR,
