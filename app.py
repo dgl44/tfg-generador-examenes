@@ -9,12 +9,19 @@ Ejecutar con:
     uv run --native-tls streamlit run app.py
 """
 
+import io
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 # Permite importar el paquete 'generador' desde src/ al ejecutar con Streamlit.
 sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+# TLS: usar el almacén de certificados de Windows para las llamadas a Bedrock
+# (evita el fallo de verificación de certificado tras interceptores TLS locales).
+import truststore  # noqa: E402
+truststore.inject_into_ssl()
 
 import streamlit as st
 
@@ -120,8 +127,8 @@ def _construir_contexto() -> ContextoAcademico:
 
 st.markdown('<p class="seccion">Código del proyecto</p>', unsafe_allow_html=True)
 archivos = st.file_uploader(
-    "Selecciona los archivos de código (.py)",
-    type=["py"],
+    "Sube el proyecto en un .zip (o selecciona archivos .py/.java sueltos)",
+    type=["zip", "py", "java"],
     accept_multiple_files=True,
 )
 
@@ -132,7 +139,13 @@ if generar and archivos:
     with tempfile.TemporaryDirectory() as tmp:
         carpeta = Path(tmp)
         for archivo in archivos:
-            (carpeta / archivo.name).write_bytes(archivo.getbuffer())
+            if archivo.name.lower().endswith(".zip"):
+                # El proyecto se sube comprimido: se descomprime conservando su
+                # estructura de carpetas, que procesar_repositorio recorre.
+                with zipfile.ZipFile(io.BytesIO(archivo.getvalue())) as z:
+                    z.extractall(carpeta)
+            else:
+                (carpeta / archivo.name).write_bytes(archivo.getbuffer())
         with st.spinner("Generando preguntas. Puede tardar según el número de unidades."):
             resultados = procesar_repositorio(carpeta, contexto)
     st.session_state["resultados"] = resultados
