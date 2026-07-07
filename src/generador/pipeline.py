@@ -112,14 +112,33 @@ def procesar_archivo(
 
     tipos = contexto.tipos_pregunta
     resultados: list[ResultadoPregunta] = []
+    fallos = 0
+    ultimo_error: Exception | None = None
     for i, unidad in enumerate(a_procesar, start=1):
         tipo = tipos[(i - 1) % len(tipos)]
         print(f"\n{'=' * 60}")
         print(f"UNIDAD {i}/{len(a_procesar)}: {unidad}  [tipo: {tipo.value}]")
         print(f"{'=' * 60}")
-        crew = construir_crew_para_unidad(unidad, contexto, tipo)
-        salida = crew.kickoff()
-        resultados.append(_construir_resultado(unidad, tipo, salida))
+        # La generación depende de un servicio externo no determinista: si una
+        # unidad falla (error del modelo o de la red), se omite y se continúa con
+        # las demás, de modo que un fallo puntual no invalide todo el examen.
+        try:
+            crew = construir_crew_para_unidad(unidad, contexto, tipo)
+            salida = crew.kickoff()
+            resultados.append(_construir_resultado(unidad, tipo, salida))
+        except Exception as e:
+            fallos += 1
+            ultimo_error = e
+            print(f"  [aviso] unidad '{unidad.nombre}' omitida por un error: {e}")
+
+    # Si había unidades que procesar y TODAS fallaron, no es una ausencia de
+    # unidades evaluables sino un fallo sistémico (credenciales, red o servicio
+    # no disponible): se propaga para que la capa de presentación lo distinga.
+    if a_procesar and not resultados and fallos:
+        raise RuntimeError(
+            f"No se pudo generar ninguna pregunta: fallaron las {fallos} "
+            f"unidades procesadas. Último error: {ultimo_error}"
+        )
 
     return resultados
 

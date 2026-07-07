@@ -126,29 +126,96 @@ def _construir_contexto() -> ContextoAcademico:
 # ------------------------- Entrada de código -------------------------
 
 st.markdown('<p class="seccion">Código del proyecto</p>', unsafe_allow_html=True)
+
+if "generando" not in st.session_state:
+    st.session_state.generando = False
+
 archivos = st.file_uploader(
     "Sube el proyecto en un .zip (o selecciona archivos .py/.java sueltos)",
     type=["zip", "py", "java"],
     accept_multiple_files=True,
+    disabled=st.session_state.generando,
 )
 
-generar = st.button("Generar preguntas", type="primary", disabled=not archivos)
+generar = st.button(
+    "Generar preguntas",
+    type="primary",
+    disabled=st.session_state.generando or not archivos,
+)
 
+# Fase 1: al pulsar, se guardan los bytes de los archivos y se entra en estado
+# "generando". Guardar los bytes evita depender del widget, que el docente
+# podría cambiar durante la generación.
 if generar and archivos:
+    st.session_state["_archivos"] = [(a.name, a.getvalue()) for a in archivos]
+    st.session_state["resultados"] = None
+    st.session_state["_aviso"] = None
+    st.session_state.generando = True
+    st.rerun()
+
+# Fase 2: se genera con los controles ya deshabilitados (rerun anterior), de modo
+# que la interfaz no se pueda alterar a mitad de la generación.
+if st.session_state.generando:
     contexto = _construir_contexto()
-    with tempfile.TemporaryDirectory() as tmp:
-        carpeta = Path(tmp)
-        for archivo in archivos:
-            if archivo.name.lower().endswith(".zip"):
-                # El proyecto se sube comprimido: se descomprime conservando su
-                # estructura de carpetas, que procesar_repositorio recorre.
-                with zipfile.ZipFile(io.BytesIO(archivo.getvalue())) as z:
-                    z.extractall(carpeta)
-            else:
-                (carpeta / archivo.name).write_bytes(archivo.getbuffer())
-        with st.spinner("Generando preguntas. Puede tardar según el número de unidades."):
-            resultados = procesar_repositorio(carpeta, contexto)
-    st.session_state["resultados"] = resultados
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            carpeta = Path(tmp)
+            for nombre, datos in st.session_state.get("_archivos", []):
+                if nombre.lower().endswith(".zip"):
+                    with zipfile.ZipFile(io.BytesIO(datos)) as z:
+                        z.extractall(carpeta)
+                else:
+                    (carpeta / nombre).write_bytes(datos)
+            with st.spinner("Generando preguntas. Puede tardar según el número de unidades."):
+                resultados = procesar_repositorio(carpeta, contexto)
+        st.session_state["resultados"] = resultados
+        if not resultados:
+            st.session_state["_aviso"] = ("warning", None)
+    except Exception as e:
+        # La generación depende de un servicio externo no determinista (Amazon
+        # Bedrock): ante un fallo de conexión, credenciales o del modelo, se
+        # informa al docente en lugar de mostrar un error técnico sin contexto.
+        # Se distingue el fallo de autenticación (token/credenciales) del resto.
+        st.session_state["resultados"] = None
+        _texto = str(e).lower()
+        _es_auth = any(
+            clave in _texto
+            for clave in ("accessdenied", "authentication", "api key",
+                          "credential", "unauthorized", "not authorized", "token")
+        )
+        st.session_state["_aviso"] = ("error_auth" if _es_auth else "error", e)
+    finally:
+        st.session_state.generando = False
+        st.rerun()
+
+# Aviso persistido tras la generación (superviviente al rerun de la fase 2).
+_aviso = st.session_state.get("_aviso")
+if _aviso:
+    _clase, _detalle = _aviso
+    if _clase == "warning":
+        st.warning(
+            "No se ha generado ninguna pregunta. Puede que el proyecto no "
+            "contenga unidades de código evaluables (todas triviales o de "
+            "plantilla), o que el archivo subido no sea válido."
+        )
+    else:
+        if _clase == "error_auth":
+            st.error(
+                "No se han podido generar las preguntas: el acceso al servicio "
+                "de generación (Amazon Bedrock) ha sido denegado. Comprueba que "
+                "las credenciales de acceso ---el token de Bedrock--- sean "
+                "correctas y sigan vigentes."
+            )
+        else:
+            st.error(
+                "No se han podido generar las preguntas. El servicio de generación "
+                "(Amazon Bedrock) puede estar temporalmente no disponible o haber "
+                "devuelto un error. Vuelve a intentarlo; si el problema persiste, "
+                "revisa la conexión y las credenciales de acceso."
+            )
+        if _detalle is not None:
+            with st.expander("Ver detalle técnico"):
+                st.exception(_detalle)
 
 
 # ------------------------- Revisión y selección -------------------------
